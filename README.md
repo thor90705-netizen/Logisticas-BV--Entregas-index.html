@@ -1,2 +1,1004 @@
-# Logisticas-BV
-acompanhamento de entregas e pagamentos
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rastreamento de Entregas</title>
+    <!-- Carrega Tailwind CSS para estilização moderna e responsiva -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // Importado addDoc para adicionar novos documentos
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, updateDoc, setLogLevel, getDocs, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Define variáveis globais no escopo da janela para acesso pelo script principal
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            signInAnonymously,
+            signInWithCustomToken,
+            getFirestore,
+            doc,
+            setDoc,
+            onSnapshot,
+            collection,
+            query,
+            updateDoc,
+            setLogLevel,
+            getDocs, 
+            addDoc // Adicionado addDoc
+        };
+    </script>
+    
+    <!-- Configuração de fontes e cores do Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        // Cores personalizadas VIBRANTES
+                        'status-green': '#16A34A', // Entregue (Verde Vivo)
+                        'status-yellow': '#FFD700', // Em Rota (Amarelo Puro)
+                        'status-red': '#B22222', // Pendente / Cancelado (Vermelho Carmim)
+                        'status-blue': '#4169E1', // Agendado / Processando (Azul Royal)
+                        'header-dark': '#0f172a', // Azul Escuro para o cabeçalho
+                        'delivery-confirm': '#FBBF24', // Cor amarela para botão de Entrega Física
+                        'delivery-text': '#92400E', // Cor do texto para botão de Entrega Física
+                        'daily-stats': '#1E40AF', // Azul para estatística diária
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Estilos básicos para o container principal */
+        body {
+            background-color: #f3f4f6;
+            font-family: 'Inter', sans-serif;
+        }
+        /* Classe para o Card de Entrega */
+        .delivery-card {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .delivery-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+        }
+        /* Estilo para a barra de status */
+        .status-bar {
+            border-top-left-radius: 0.5rem;
+            border-top-right-radius: 0.5rem;
+            height: 8px;
+        }
+        /* Esconde o formulário por padrão */
+        .hidden-form {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease-in-out;
+        }
+        .hidden-form.open {
+            max-height: 700px; /* Aumentado para acomodar mais campos */
+        }
+        .stat-card {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .stat-card:hover {
+            background-color: #f1f8ff;
+        }
+        /* Estilo para botões de dupla ação */
+        .action-btn-group {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+        }
+        /* Novo estilo para o grid de estatísticas (5 colunas agora) */
+        #stats-container {
+             grid-template-columns: repeat(2, 1fr); /* 2 colunas em mobile */
+             gap: 0.75rem;
+        }
+        @media (min-width: 640px) {
+            #stats-container {
+                grid-template-columns: repeat(5, 1fr); /* 5 colunas no desktop */
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <div id="app" class="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- CABEÇALHO AZUL ESCURO E ICONE DE CAMINHÃO -->
+        <header class="mb-8 p-4 bg-header-dark rounded-xl shadow-lg text-white">
+            <h1 class="text-3xl font-bold mb-2 flex items-center">
+                <span class="mr-3 text-4xl">🚚</span> Painel de Entregas
+            </h1>
+            <p class="text-blue-200 text-sm">
+                Gerenciamento completo. Use os botões de **Baixa Dupla** ou o formulário de cadastro abaixo.
+            </p>
+        </header>
+
+        <!-- NOVO: BOTÃO DE ABRIR CADASTRO -->
+        <div class="mb-6 flex justify-between items-center">
+            <input type="text" id="search-input" placeholder="Buscar por Motorista, Cliente ou Status..."
+                   class="flex-grow p-3 border border-gray-300 rounded-l-xl focus:ring-blue-500 focus:border-blue-500 shadow-sm text-gray-700 transition duration-150 ease-in-out">
+            <button id="toggle-form-btn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-r-xl transition duration-150 ease-in-out shadow-md flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Cadastrar
+            </button>
+        </div>
+
+        <!-- NOVO: FORMULÁRIO DE CADASTRO EXPANSÍVEL -->
+        <div id="new-delivery-form-container" class="mb-8 p-6 bg-white rounded-xl shadow-lg hidden-form">
+            <form id="new-delivery-form" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                
+                <!-- Motorista (SELECT) -->
+                <div>
+                    <label for="form-motorista" class="block text-sm font-medium text-gray-700">Motorista*</label>
+                    <select id="form-motorista" required class="mt-1 w-full p-2 border border-gray-300 rounded-lg bg-white"></select>
+                </div>
+                
+                <!-- Cliente -->
+                <div>
+                    <label for="form-cliente" class="block text-sm font-medium text-gray-700">Cliente*</label>
+                    <input type="text" id="form-cliente" required class="mt-1 w-full p-2 border border-gray-300 rounded-lg">
+                </div>
+
+                <!-- Total -->
+                <div>
+                    <label for="form-total" class="block text-sm font-medium text-gray-700">Total da Nota (R$)*</label>
+                    <!-- Adicionado onblur para formatação automática de moeda -->
+                    <input type="number" id="form-total" step="0.01" required placeholder="Ex: 150.50 ou 580" 
+                           onblur="formatCurrencyInput(this)" class="mt-1 w-full p-2 border border-gray-300 rounded-lg">
+                </div>
+                
+                <!-- Dinheiro -->
+                <div>
+                    <label for="form-dinheiro" class="block text-sm font-medium text-gray-700">Pago em Dinheiro (R$)</label>
+                    <!-- Adicionado onblur para formatação automática de moeda -->
+                    <input type="number" id="form-dinheiro" step="0.01" value="0.00" 
+                           onblur="formatCurrencyInput(this)" class="mt-1 w-full p-2 border border-gray-300 rounded-lg">
+                </div>
+                
+                <!-- Carro (SELECT) -->
+                <div>
+                    <label for="form-carro" class="block text-sm font-medium text-gray-700">Carro</label>
+                    <select id="form-carro" class="mt-1 w-full p-2 border border-gray-300 rounded-lg bg-white"></select>
+                </div>
+
+                <!-- Saída (Hora) -->
+                <div>
+                    <label for="form-saida" class="block text-sm font-medium text-gray-700">Saída (Ex: 1430)</label>
+                    <input type="number" id="form-saida" placeholder="Ex: 1430" class="mt-1 w-full p-2 border border-gray-300 rounded-lg">
+                </div>
+                
+                <!-- Status Inicial -->
+                <div>
+                    <label for="form-status" class="block text-sm font-medium text-gray-700">Status Inicial*</label>
+                    <select id="form-status" required class="mt-1 w-full p-2 border border-gray-300 rounded-lg bg-white">
+                        <option value="Em Rota">Em Rota</option>
+                        <option value="Pendente">Pendente</option>
+                        <option value="Processando">Processando</option>
+                        <option value="Agendado">Agendado</option>
+                    </select>
+                </div>
+                
+                <!-- Observações -->
+                <div class="md:col-span-3">
+                    <label for="form-obs" class="block text-sm font-medium text-gray-700">Observações</label>
+                    <textarea id="form-obs" rows="1" class="mt-1 w-full p-2 border border-gray-300 rounded-lg"></textarea>
+                </div>
+
+
+                <!-- Botão de Enviar (Ocupa as 3 colunas em telas grandes) -->
+                <div class="md:col-span-3 pt-4">
+                    <button type="submit" id="submit-form-btn"
+                            class="w-full bg-status-blue hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl transition duration-150 ease-in-out shadow-lg flex items-center justify-center">
+                        <span class="mr-2">Salvar Entrega</span>
+                        <svg id="submit-spinner" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </button>
+                    <p id="form-message" class="text-center mt-2 text-sm text-red-500 hidden"></p>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Estatísticas -->
+        <!-- O grid foi movido para o CSS para 5 colunas no desktop -->
+        <div id="stats-container" class="grid gap-4 mb-8"> 
+            <!-- Os cartões de estatísticas serão preenchidos pelo JS -->
+        </div>
+
+        <!-- Container da Lista de Entregas -->
+        <div id="deliveries-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- As entregas serão renderizadas aqui -->
+            <div id="loading-spinner" class="col-span-full flex justify-center items-center py-12">
+                <svg class="animate-spin h-8 w-8 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="ml-3 text-lg text-gray-600">Conectando ao banco de dados...</p>
+            </div>
+        </div>
+        <div id="error-message" class="hidden col-span-full text-center py-12 text-red-600 font-medium">
+            <!-- Mensagens de erro aparecerão aqui -->
+        </div>
+        <div id="user-info" class="text-xs text-gray-400 text-center mt-6"></div>
+    </div>
+
+    <script>
+        // --- VARIÁVEIS GLOBAIS ---
+        const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRLz_hxZtBWYdKvQT_rPGm8OAw5HPv7yEi5bisVbEDWhecGSSjICBU-ElZQFDOyqQ/pubhtml";
+        const FIRESTORE_COLLECTION_NAME = 'deliveries';
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-delivery-app';
+
+        let db, auth;
+        let userId = 'unknown';
+        let allDeliveries = [];
+        let currentFilter = ''; 
+        let isAuthReady = false;
+
+        const deliveriesContainer = document.getElementById('deliveries-container');
+        const searchInput = document.getElementById('search-input');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const errorMessage = document.getElementById('error-message');
+        const statsContainer = document.getElementById('stats-container');
+        const userInfoElement = document.getElementById('user-info');
+        
+        // Elementos do formulário
+        const formContainer = document.getElementById('new-delivery-form-container');
+        const formElement = document.getElementById('new-delivery-form');
+        const toggleFormBtn = document.getElementById('toggle-form-btn');
+        const submitFormBtn = document.getElementById('submit-form-btn');
+        const submitSpinner = document.getElementById('submit-spinner');
+        const formMessage = document.getElementById('form-message');
+        const formMotoristaSelect = document.getElementById('form-motorista');
+        const formCarroSelect = document.getElementById('form-carro');
+
+        // Listas de Opções para Dropdowns - ATUALIZADAS CONFORME SOLICITADO
+        const mockDrivers = ['Marcio', 'Gustavo Xin', 'Lucas Castro', 'William', 'Vinicius', 'Wesley', 'Novo', 'Outro'];
+        const mockCars = ['Fiorino', 'Fiorino 1', 'Fiorino Nova', 'Van', 'Amarock', 'Firoino Quadrada', 'Novo', 'Outro'];
+
+
+        // Mapeamento de cores baseado nos status - ATUALIZADAS CONFORME SOLICITADO
+        const statusColorMap = {
+            'entregue': { color: 'status-green', text: 'Entregue' },
+            'em rota': { color: 'status-yellow', text: 'Em Rota' },
+            'pendente': { color: 'status-red', text: 'Pendente' },
+            'cancelado': { color: 'status-red', text: 'Cancelado' },
+            'processando': { color: 'status-blue', text: 'Processando' },
+            'agendado': { color: 'status-blue', text: 'Agendado' },
+            'default': { color: 'bg-gray-400', text: 'Desconhecido' }
+        };
+
+        // Estrutura de dados simulada - Endereço REMOVIDO. Adicionado DeliveryConfirmed.
+        const mockDeliveries = [
+            // PIX PAGO (Total = Pix + Dinheiro). Entregue fisicamente.
+            { 'Status Pix': 'Entregue', Motorista: 'Marcio', Cliente: 'Cliente Alfa', Total: 150.50, Dinheiro: 0.00, Pix: 150.50, ID: '12345', Saída: '1030', Chegada: '1145', Obs: 'Portaria', PixPago: true, Carro: 'Fiorino', DeliveryConfirmed: true, Data: '01/10/2025' },
+            // PIX PENDENTE (Total - Dinheiro > 0). Em Rota, entrega física pendente.
+            { 'Status Pix': 'Em Rota', Motorista: 'Gustavo Xin', Cliente: 'Cliente Beta', Total: 80.00, Dinheiro: 30.00, Pix: 50.00, ID: '67890', Saída: '1212', Chegada: '', Obs: 'Ligar antes', PixPago: false, Carro: 'Van', DeliveryConfirmed: false, Data: '01/10/2025' },
+            // TOTAL PAGO EM DINHEIRO (Pix = 0). Pendente. Entrega física pendente.
+            { 'Status Pix': 'Pendente', Motorista: 'Lucas Castro', Cliente: 'Cliente Gama', Total: 200.00, Dinheiro: 200.00, Pix: 0.00, ID: '11223', Saída: '905', Chegada: '', Obs: 'Aguardando estoque', PixPago: false, Carro: 'Fiorino Nova', DeliveryConfirmed: false, Data: '30/09/2025' },
+            // PIX PENDENTE. Em Rota. Entregue fisicamente, mas PIX pendente.
+            { 'Status Pix': 'Em Rota', Motorista: 'William', Cliente: 'Cliente Delta', Total: 45.00, Dinheiro: 0.00, Pix: 45.00, ID: '44556', Saída: '1545', Chegada: '', Obs: 'Ok', PixPago: false, Carro: 'Amarock', DeliveryConfirmed: true, Data: '01/10/2025' },
+        ];
+        
+        // --- FUNÇÕES DE UTILIDADE ---
+
+        /**
+         * Preenche os selects de Motorista e Carro com as opções mockadas.
+         */
+        function populateSelects() {
+            // Motoristas
+            formMotoristaSelect.innerHTML = '<option value="" disabled selected>Selecione o Motorista</option>';
+            mockDrivers.forEach(driver => {
+                const option = document.createElement('option');
+                option.value = driver;
+                option.textContent = driver;
+                formMotoristaSelect.appendChild(option);
+            });
+
+            // Carros
+            formCarroSelect.innerHTML = '<option value="" selected>Selecione o Carro (Opcional)</option>';
+            mockCars.forEach(car => {
+                const option = document.createElement('option');
+                option.value = car;
+                option.textContent = car;
+                formCarroSelect.appendChild(option);
+            });
+        }
+
+        /**
+         * Enforces two decimal places and formats the number input field value.
+         * @param {HTMLInputElement} inputElement - The input field to format.
+         */
+        function formatCurrencyInput(inputElement) {
+            let value = inputElement.value.replace(',', '.'); 
+            value = parseFloat(value);
+            if (isNaN(value)) {
+                inputElement.value = '0.00';
+            } else {
+                value = Math.round(value * 100) / 100;
+                inputElement.value = value.toFixed(2);
+            }
+        }
+
+
+        /**
+         * Formata uma string numérica de 3 ou 4 dígitos como HH:MM.
+         * @param {string | number} timeValue - O valor da hora sem dois pontos.
+         * @returns {string} O valor formatado como HH:MM.
+         */
+        function formatTime(timeValue) {
+            const str = String(timeValue).trim();
+            if (!str || isNaN(str)) return '';
+            
+            if (str.length === 3) {
+                return `0${str.slice(0, 1)}:${str.slice(1, 3)}`;
+            } else if (str.length === 4) {
+                return `${str.slice(0, 2)}:${str.slice(2, 4)}`;
+            }
+            return str; 
+        }
+        
+        /**
+         * Calcula a duração entre a hora de saída e a hora de chegada.
+         * @param {string} saida - Hora de saída no formato HHMM.
+         * @param {string} chegada - Hora de chegada no formato HHMM.
+         * @returns {string} Duração formatada (ex: "1h 15m" ou "30m").
+         */
+        function calculateDuration(saida, chegada) {
+            const saidaStr = String(saida).padStart(4, '0');
+            const chegadaStr = String(chegada).padStart(4, '0');
+            
+            if (saidaStr.length !== 4 || chegadaStr.length !== 4) return 'N/A';
+
+            const saidaH = parseInt(saidaStr.slice(0, 2), 10);
+            const saidaM = parseInt(saidaStr.slice(2, 4), 10);
+            const chegadaH = parseInt(chegadaStr.slice(0, 2), 10);
+            const chegadaM = parseInt(chegadaStr.slice(2, 4), 10);
+
+            // Converte para minutos absolutos
+            const saidaMinutos = saidaH * 60 + saidaM;
+            const chegadaMinutos = chegadaH * 60 + chegadaM;
+
+            if (chegadaMinutos <= saidaMinutos) return 'Inválido'; // Garante que a chegada é depois da saída
+
+            const duracaoTotalMinutos = chegadaMinutos - saidaMinutos;
+            
+            const horas = Math.floor(duracaoTotalMinutos / 60);
+            const minutos = duracaoTotalMinutos % 60;
+            
+            let resultado = [];
+            if (horas > 0) {
+                resultado.push(`${horas}h`);
+            }
+            if (minutos > 0 || horas === 0) {
+                resultado.push(`${minutos}m`);
+            }
+
+            return resultado.join(' ');
+        }
+
+
+        /**
+         * Formata um valor numérico para o formato de moeda Real (R$).
+         * @param {number} value - O valor a ser formatado.
+         * @returns {string} O valor formatado como R$ X.XX.
+         */
+        function formatCurrency(value) {
+            if (typeof value === null || typeof value === undefined || isNaN(value)) return 'R$ 0,00';
+            return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+        }
+
+        // --- FIREBASE E DADOS ---
+
+        /**
+         * Retorna o caminho da coleção pública no Firestore.
+         */
+        function getCollectionPath() {
+            return `artifacts/${APP_ID}/public/data/${FIRESTORE_COLLECTION_NAME}`;
+        }
+        
+        /**
+         * Inicializa o Firebase e realiza a autenticação.
+         */
+        async function initializeFirebase() {
+            try {
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const app = firebase.initializeApp(firebaseConfig);
+                db = firebase.getFirestore(app);
+                auth = firebase.getAuth(app);
+                firebase.setLogLevel('debug');
+
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await firebase.signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await firebase.signInAnonymously(auth);
+                }
+
+                userId = auth.currentUser?.uid || crypto.randomUUID();
+                userInfoElement.textContent = `App ID: ${APP_ID} | User ID: ${userId}`;
+                isAuthReady = true;
+                
+                await seedDataIfEmpty();
+                setupDataListener();
+
+            } catch (error) {
+                console.error("Erro ao inicializar Firebase:", error);
+                errorMessage.textContent = `Erro grave ao conectar ao banco de dados. ${error.message}`;
+                errorMessage.classList.remove('hidden');
+            }
+        }
+
+        /**
+         * Tenta buscar e parsear os dados da planilha APENAS se o Firestore estiver vazio (seeding).
+         */
+        async function seedDataIfEmpty() {
+            const deliveryRef = firebase.collection(db, getCollectionPath());
+            const snapshot = await firebase.getDocs(deliveryRef); 
+
+            if (snapshot.empty) {
+                console.log("Firestore vazio. Usando mock data para seeding...");
+                
+                // Mapeia o mock data para garantir a presença do campo DeliveryConfirmed
+                const dataToSeed = mockDeliveries.map(d => ({
+                    ...d,
+                    DeliveryConfirmed: d.DeliveryConfirmed || (d['Status Pix'].toLowerCase() === 'entregue')
+                }));
+
+                for (let i = 0; i < dataToSeed.length; i++) {
+                    const delivery = dataToSeed[i];
+                    const docId = delivery.ID || String(Date.now() + i); 
+                    await firebase.setDoc(firebase.doc(db, getCollectionPath(), docId), { 
+                        ...delivery,
+                        docId: docId 
+                    });
+                }
+                console.log(`Firestore semeado com ${dataToSeed.length} itens.`);
+            }
+        }
+        
+        /**
+         * Configura o listener de tempo real do Firestore.
+         */
+        function setupDataListener() {
+            if (!isAuthReady) return;
+
+            const deliveryRef = firebase.collection(db, getCollectionPath());
+            const q = firebase.query(deliveryRef);
+
+            firebase.onSnapshot(q, (snapshot) => {
+                loadingSpinner.classList.add('hidden');
+                allDeliveries = [];
+                
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const total = parseFloat(data.Total) || 0;
+                    const dinheiro = parseFloat(data.Dinheiro) || 0;
+                    
+                    allDeliveries.push({ 
+                        ...data, 
+                        docId: doc.id,
+                        Total: total,
+                        Dinheiro: dinheiro,
+                        Pix: total - dinheiro,
+                        // Garante que DeliveryConfirmed é um booleano (para novos cadastros)
+                        DeliveryConfirmed: data.DeliveryConfirmed === true 
+                    });
+                });
+
+                filterDeliveries(); 
+                
+            }, (error) => {
+                console.error("Erro no listener do Firestore:", error);
+                errorMessage.textContent = `Erro ao carregar dados em tempo real: ${error.message}`;
+                errorMessage.classList.remove('hidden');
+            });
+        }
+        
+        // --- FUNÇÕES DE AÇÃO DUPLA ---
+
+        /**
+         * Adiciona uma nova entrega ao Firestore.
+         */
+        async function addNewDelivery(event) {
+            event.preventDefault();
+            if (!isAuthReady) {
+                formMessage.textContent = "Aguardando conexão com o banco de dados...";
+                formMessage.classList.remove('hidden');
+                return;
+            }
+
+            submitFormBtn.disabled = true;
+            submitSpinner.classList.remove('hidden');
+            formMessage.classList.add('hidden');
+            formMessage.textContent = '';
+            
+            try {
+                const motorista = formMotoristaSelect.value;
+                const cliente = document.getElementById('form-cliente').value;
+                const total = parseFloat(document.getElementById('form-total').value) || 0;
+                const dinheiro = parseFloat(document.getElementById('form-dinheiro').value) || 0;
+                const carro = formCarroSelect.value;
+                const saida = document.getElementById('form-saida').value;
+                const statusInicial = document.getElementById('form-status').value;
+                const obs = document.getElementById('form-obs').value;
+                
+                const pixPendente = total - dinheiro; 
+
+                const newDeliveryData = {
+                    Motorista: motorista,
+                    Cliente: cliente,
+                    Total: total,
+                    Dinheiro: dinheiro,
+                    Pix: pixPendente, 
+                    Saída: saida,
+                    'Status Pix': statusInicial,
+                    Carro: carro,
+                    Obs: obs,
+                    ID: String(Date.now()), 
+                    Chegada: '',
+                    Data: new Date().toLocaleDateString('pt-BR'),
+                    // Se o status inicial for Entregue, presume-se que a entrega física foi feita.
+                    DeliveryConfirmed: statusInicial.toLowerCase() === 'entregue', 
+                    PixPago: statusInicial.toLowerCase() === 'entregue' && pixPendente <= 0, 
+                };
+
+                await firebase.addDoc(firebase.collection(db, getCollectionPath()), newDeliveryData);
+                
+                formMessage.textContent = `Entrega de ${cliente} adicionada com sucesso!`;
+                formMessage.classList.remove('text-red-500', 'hidden');
+                formMessage.classList.add('text-green-600');
+                
+                formElement.reset(); 
+                populateSelects(); 
+                
+                setTimeout(() => {
+                    formContainer.classList.remove('open');
+                    toggleFormBtn.textContent = 'Cadastrar';
+                    toggleFormBtn.classList.remove('bg-gray-500');
+                    toggleFormBtn.classList.add('bg-blue-600');
+                    formMessage.classList.add('hidden');
+                }, 2000);
+
+            } catch (error) {
+                console.error("Erro ao adicionar nova entrega:", error);
+                formMessage.textContent = `Falha ao salvar: ${error.message}`;
+                formMessage.classList.remove('hidden');
+                formMessage.classList.add('text-red-500');
+            } finally {
+                submitFormBtn.disabled = false;
+                submitSpinner.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Atualiza o status de ENTREGA FÍSICA para confirmada e registra a hora de chegada.
+         * CORRIGIDO: Mantém o Status Pix original.
+         * @param {string} docId - O ID do documento no Firestore.
+         */
+        async function confirmDelivery(docId) {
+            if (!isAuthReady) return;
+            
+            const cardElement = document.querySelector(`[data-doc-id="${docId}"]`);
+            if (cardElement) {
+                cardElement.innerHTML = `<div class="p-6 text-center text-gray-500 font-semibold">Confirmando Entrega Física...</div>`;
+            }
+
+            try {
+                const docRef = firebase.doc(db, getCollectionPath(), docId);
+                
+                // Pega a hora atual no formato HHMM
+                const now = new Date();
+                const currentHour = String(now.getHours()).padStart(2, '0');
+                const currentMinute = String(now.getMinutes()).padStart(2, '0');
+                const currentTimeHHMM = currentHour + currentMinute;
+                
+                await firebase.updateDoc(docRef, {
+                    DeliveryConfirmed: true, 
+                    Chegada: currentTimeHHMM, 
+                    DataAtualizacao: new Date().toISOString()
+                });
+
+            } catch (error) {
+                console.error("Erro ao confirmar entrega física:", error);
+                const cardElement = document.querySelector(`[data-doc-id="${docId}"]`);
+                if(cardElement) {
+                    cardElement.innerHTML = `<div class="p-6 text-center text-red-600 font-semibold">Falha ao atualizar Entrega! Recarregue a página.</div>`;
+                }
+            }
+        }
+        
+        /**
+         * Atualiza o status de PIX/PAGAMENTO para 'Entregue'.
+         * @param {string} docId - O ID do documento no Firestore.
+         */
+        async function confirmPix(docId) {
+            if (!isAuthReady) return;
+            
+            const cardElement = document.querySelector(`[data-doc-id="${docId}"]`);
+            if (cardElement) {
+                cardElement.innerHTML = `<div class="p-6 text-center text-gray-500 font-semibold">Confirmando Recebimento PIX...</div>`;
+            }
+
+            try {
+                const docRef = firebase.doc(db, getCollectionPath(), docId);
+                
+                await firebase.updateDoc(docRef, {
+                    'Status Pix': 'Entregue', 
+                    PixPago: true, 
+                    DataAtualizacao: new Date().toISOString()
+                });
+
+            } catch (error) {
+                console.error("Erro ao confirmar PIX:", error);
+                const cardElement = document.querySelector(`[data-doc-id="${docId}"]`);
+                if(cardElement) {
+                    cardElement.innerHTML = `<div class="p-6 text-center text-red-600 font-semibold">Falha ao atualizar PIX! Recarregue a página.</div>`;
+                }
+            }
+        }
+
+
+        // --- RENDERIZAÇÃO E FILTRO ---
+
+        /**
+         * Função de filtro principal que aplica a busca ou o filtro de status.
+         * @param {string} [filterType] - Tipo de filtro a aplicar ('pix_pending', 'delivered', 'in_route').
+         */
+        function filterDeliveries(filterType) {
+            const query = searchInput.value.toLowerCase().trim();
+
+            // 1. Lógica para definir o filtro ativo
+            if (filterType) {
+                // Se um filtro de estatística foi clicado, use-o
+                currentFilter = filterType;
+                searchInput.value = ''; // Limpa a busca para evitar conflito visual
+            } else if (query) {
+                // Se o usuário está digitando, o filtro é a busca por texto
+                currentFilter = 'text_search';
+            } else {
+                // Se nada foi clicado ou digitado, limpa o filtro (mostra tudo)
+                currentFilter = '';
+            }
+
+            let filtered = allDeliveries;
+            
+            // 2. Aplica a lógica de filtragem
+            if (currentFilter === 'text_search') {
+                filtered = allDeliveries.filter(delivery => {
+                    return Object.values(delivery).some(value =>
+                        String(value).toLowerCase().includes(query)
+                    );
+                });
+            } else if (currentFilter === 'pix_pending') {
+                // Filtro: PIX Pendente > 0 E Status NÃO é Entregue
+                filtered = allDeliveries.filter(delivery => (delivery.Pix > 0) && (delivery['Status Pix'] || '').toLowerCase() !== 'entregue');
+            } else if (currentFilter === 'delivered') {
+                // Filtro: Apenas Entregues (PIX Confirmado)
+                filtered = allDeliveries.filter(delivery => (delivery['Status Pix'] || '').toLowerCase() === 'entregue');
+            } else if (currentFilter === 'in_route') {
+                // Filtro: Apenas Em Rota
+                filtered = allDeliveries.filter(delivery => (delivery['Status Pix'] || '').toLowerCase() === 'em rota');
+            } else {
+                 filtered = allDeliveries;
+            }
+            
+            renderDeliveries(filtered);
+        }
+
+        /**
+         * Gera o HTML para um único cartão de entrega.
+         * @param {Object} delivery - O objeto de dados da entrega.
+         * @returns {string} O HTML do cartão.
+         */
+        function createDeliveryCard(delivery) {
+            const statusKey = (delivery['Status Pix'] || 'default').toLowerCase().trim(); 
+            const statusInfo = statusColorMap[statusKey] || statusColorMap.default;
+            const statusBarClass = statusInfo.color;
+            const statusText = statusInfo.text;
+            
+            const emoji = {
+                'entregue': '✅',
+                'em rota': '🚚',
+                'pendente': '⏳',
+                'cancelado': '❌',
+                'processando': '📦',
+                'agendado': '📅',
+                'default': '❓'
+            }[statusKey] || '❓';
+            
+            const driver = delivery.Motorista || 'N/A';
+            const client = delivery.Cliente || 'N/A';
+            const id = delivery.ID || 'N/A';
+            const obs = delivery.Obs || 'Sem observações';
+            const total = formatCurrency(delivery.Total); 
+            const dinheiro = formatCurrency(delivery.Dinheiro); 
+            const pixPendente = formatCurrency(delivery.Pix); 
+            
+            const horarioSaida = delivery.Saída;
+            const horarioChegada = delivery.Chegada;
+            const docId = delivery.docId;
+
+            const isPixConfirmed = statusKey === 'entregue';
+            const isDeliveryConfirmed = delivery.DeliveryConfirmed === true;
+            const hasPixPending = delivery.Pix > 0;
+            
+            // Calcula Duração apenas se tiver Saída E Chegada
+            const durationText = (horarioSaida && horarioChegada) ? calculateDuration(horarioSaida, horarioChegada) : 'Aguardando Chegada';
+
+            // Condição para mostrar o botão de entrega física: se não foi confirmada OU se o horário de chegada está faltando.
+            const showDeliveryButton = !isDeliveryConfirmed || !horarioChegada;
+
+            // Botão 1: Confirmar Entrega Física (Aparece se ainda não foi entregue fisicamente OU se o horário está faltando)
+            const deliveryButton = showDeliveryButton ? `
+                <button 
+                    onclick="confirmDelivery('${docId}')"
+                    class="bg-delivery-confirm hover:bg-yellow-600 text-delivery-text font-bold py-2 px-2 rounded-lg transition duration-150 ease-in-out shadow-sm text-sm whitespace-nowrap"
+                >
+                    ${!isDeliveryConfirmed ? 'Entregue Físico & Registrar Hora' : 'Registrar Hora (Faltante)'}
+                </button>
+            ` : `<button class="bg-gray-200 text-gray-500 font-bold py-2 px-2 rounded-lg text-sm" disabled>Entrega Física Concluída</button>`; 
+
+            // Botão 2: Confirmar PIX (Aparece se houver PIX pendente E o PIX não foi confirmado)
+            const pixButton = hasPixPending && !isPixConfirmed ? `
+                <button 
+                    onclick="confirmPix('${docId}')"
+                    class="bg-status-green hover:bg-green-700 text-white font-bold py-2 px-2 rounded-lg transition duration-150 ease-in-out shadow-sm text-sm whitespace-nowrap"
+                >
+                    PIX Recebido
+                </button>
+            ` : `<button class="bg-gray-200 text-gray-500 font-bold py-2 px-2 rounded-lg text-sm" disabled>PIX Pago ou Não Aplicável</button>`;
+            
+            // Renderiza o grupo de botões (Aparece se houver pelo menos uma ação pendente)
+            const showActionGroup = showDeliveryButton || (hasPixPending && !isPixConfirmed);
+
+            const actionButtons = showActionGroup ? `
+                <div class="mt-4 action-btn-group">
+                    ${deliveryButton}
+                    ${pixButton}
+                </div>
+            ` : '';
+
+            // Cor e ícone do PIX Pendente
+            const pixColor = (hasPixPending && !isPixConfirmed) ? 'text-red-600 font-bold' : 'text-gray-700';
+            const pixIcon = (hasPixPending && !isPixConfirmed) ? '⚠️' : '✅';
+
+
+            return `
+                <div class="delivery-card bg-white rounded-xl overflow-hidden shadow-md" data-doc-id="${docId}">
+                    <!-- Barra de Status (Cor da Planilha) -->
+                    <div class="status-bar ${statusBarClass}"></div>
+
+                    <div class="p-4 sm:p-6">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="px-3 py-1 text-xs font-semibold rounded-full text-white ${statusBarClass} bg-opacity-90">
+                                ${emoji} Status PIX: ${statusText}
+                            </span>
+                            <!-- NOVO: Data da Entrega -->
+                            <span class="text-xs font-bold text-gray-600">${delivery.Data || 'N/A'}</span>
+                        </div>
+
+                        <h2 class="text-xl font-bold text-gray-900 mb-1">${driver} (${delivery.Carro || 'N/A'})</h2>
+                        
+                        <!-- Status de Entrega Física (NOVO) -->
+                        <div class="flex justify-between items-center mb-2 text-sm">
+                            <p class="font-medium text-gray-700">Status Entrega Física:</p>
+                            <p class="font-bold ${isDeliveryConfirmed ? 'text-green-600' : 'text-yellow-600'}">
+                                ${isDeliveryConfirmed ? '✅ Concluída' : '⏳ Pendente'}
+                            </p>
+                        </div>
+
+                        <!-- Horários Formatados (colunas Saída e Chegada) -->
+                        <div class="flex justify-between items-center mb-1 text-sm text-gray-500">
+                            <p>Saída: <span class="font-bold text-gray-700">${formatTime(horarioSaida) || 'N/A'}</span></p>
+                            <p>Chegada: <span class="font-bold text-gray-700">${formatTime(horarioChegada) || 'N/A'}</span></p>
+                        </div>
+
+                        <!-- Duração (Tempo de Entrega) -->
+                        <div class="flex justify-between items-center mb-4 text-sm text-gray-700 border-b pb-2 border-gray-100">
+                            <p class="font-bold">Duração:</p>
+                            <p class="font-extrabold text-lg text-status-blue">${durationText}</p>
+                        </div>
+                        
+                        <!-- Cliente agora está logo abaixo dos horários para maior visibilidade -->
+                        <p class="text-sm text-gray-800 mb-4 font-semibold">
+                           Cliente: ${client}
+                        </p>
+                        
+
+                        <div class="border-t border-gray-100 pt-4 text-sm">
+                            <div class="flex justify-between text-gray-700 mb-2 font-medium">
+                                <span>Total da Nota:</span>
+                                <span class="font-bold text-lg text-gray-800">${total}</span>
+                            </div>
+                             <div class="flex justify-between text-gray-700 mb-1 text-xs">
+                                <span>Dinheiro Recebido:</span>
+                                <span>${dinheiro}</span>
+                            </div>
+                            <div class="flex justify-between text-gray-700 mb-1 text-base">
+                                <span>PIX Pendente ${pixIcon}:</span>
+                                <span class="${pixColor}">${pixPendente}</span>
+                            </div>
+                            <div class="flex flex-col text-gray-500 mt-2">
+                                <span class="font-medium text-gray-700 mb-1">Observações:</span>
+                                <p class="text-xs italic">${obs}</p>
+                            </div>
+                            ${actionButtons}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /**
+         * Retorna a data de hoje no formato dd/mm/aaaa
+         */
+        function getTodayDateString() {
+            const today = new Date();
+            const day = String(today.getDate()).padStart(2, '0');
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const year = today.getFullYear();
+            return `${day}/${month}/${year}`;
+        }
+
+
+        /**
+         * Renderiza as estatísticas do painel.
+         * @param {Array} deliveries - Lista de entregas.
+         */
+        function renderStats(deliveries) {
+            const total = deliveries.length;
+            
+            const todayDate = getTodayDateString();
+            
+            // Filtra entregas de hoje
+            const deliveriesToday = deliveries.filter(d => d.Data === todayDate);
+
+            // Estatísticas GERAIS
+            const delivered = deliveries.filter(d => (d['Status Pix'] || '').toLowerCase().includes('entregue')).length;
+            const inRoute = deliveries.filter(d => (d['Status Pix'] || '').toLowerCase() === 'em rota').length;
+            
+            // Estatísticas de PIX Pendente
+            const pixPendingAmount = deliveries
+                .filter(d => (d.Pix > 0) && (d['Status Pix'].toLowerCase() !== 'entregue'))
+                .reduce((sum, d) => sum + d.Pix, 0);
+            
+            const pixPendingCount = deliveries
+                .filter(d => (d.Pix > 0) && (d['Status Pix'].toLowerCase() !== 'entregue')).length;
+            
+            // NOVO: Contagem de Entregas Físicas Concluídas
+            const physicalConfirmed = deliveries.filter(d => d.DeliveryConfirmed === true).length;
+
+
+            const stats = [
+                // NOVO: Total de Entregas Hoje
+                { 
+                    title: `Total Hoje (${todayDate})`, 
+                    value: deliveriesToday.length, 
+                    color: 'text-daily-stats', 
+                    icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>', 
+                    action: '',
+                    filterKey: 'today'
+                },
+                { title: 'Total Geral', value: total, color: 'text-blue-600', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M13 12h.01" /></svg>', action: '', filterKey: 'general' },
+                
+                // Entregues (PIX Confirmado)
+                { title: 'PIX Confirmado (✅)', value: delivered, color: 'text-green-600', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>', action: `onclick="filterDeliveries('delivered')"` , filterKey: 'delivered' },
+                
+                // Em Rota (Não entregue ou PIX pendente)
+                { title: 'Em Rota (🚚)', value: inRoute, color: 'text-yellow-600', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>', action: `onclick="filterDeliveries('in_route')"` , filterKey: 'in_route' },
+                
+                // PIX Pendente
+                { title: `PIX Pendente (${pixPendingCount} Entregas)`, value: formatCurrency(pixPendingAmount), color: 'text-red-600', icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>', action: `onclick="filterDeliveries('pix_pending')"` , filterKey: 'pix_pending' },
+            ];
+
+            statsContainer.innerHTML = stats.map(stat => {
+                const isActive = stat.filterKey && currentFilter === stat.filterKey;
+                // Adiciona um anel (ring) colorido e sombra para o efeito "quadradinho" ativo
+                const activeStyle = isActive ? 'ring-4 ring-offset-2 ring-current shadow-xl' : 'shadow-md';
+                const clickableStyle = stat.action ? 'cursor-pointer hover:bg-gray-100' : '';
+                
+                return `
+                    <div class="stat-card bg-white p-4 rounded-xl flex items-center justify-between ${clickableStyle} ${activeStyle} ${stat.color.replace('text-', 'ring-')}" ${stat.action}>
+                        <div>
+                            <p class="text-xs font-medium text-gray-500">${stat.title}</p>
+                            <p class="text-2xl font-bold ${stat.color}">${stat.value}</p>
+                        </div>
+                        <div class="${stat.color} opacity-60">
+                            ${stat.icon}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Atualiza o placeholder para refletir o filtro ativo
+            let placeholderText = 'Buscar por Motorista, Cliente ou Status...';
+            if (currentFilter === 'pix_pending') {
+                 placeholderText = 'Filtro PIX PENDENTE ativo. Limpe a busca para voltar ao normal.';
+            } else if (currentFilter === 'delivered') {
+                 placeholderText = 'Filtro PIX CONFIRMADO ativo. Limpe a busca para voltar ao normal.';
+            } else if (currentFilter === 'in_route') {
+                 placeholderText = 'Filtro EM ROTA ativo. Limpe a busca para voltar ao normal.';
+            }
+            searchInput.placeholder = placeholderText;
+        }
+
+        /**
+         * Renderiza a lista de entregas filtrada.
+         * @param {Array} deliveries - Lista de entregas a serem exibidas.
+         */
+        function renderDeliveries(deliveries) {
+            deliveriesContainer.innerHTML = deliveries.map(createDeliveryCard).join('');
+
+            if (deliveries.length === 0) {
+                deliveriesContainer.innerHTML = `
+                    <div class="col-span-full text-center py-8 text-gray-500">
+                        <p>Nenhuma entrega encontrada com este filtro ou termo de busca.</p>
+                    </div>
+                `;
+            }
+            renderStats(allDeliveries); 
+        }
+
+        // --- FUNÇÃO DO FORMULÁRIO ---
+        function toggleForm() {
+            formContainer.classList.toggle('open');
+            if (formContainer.classList.contains('open')) {
+                toggleFormBtn.textContent = 'Esconder Formulário';
+                toggleFormBtn.classList.remove('bg-blue-600');
+                toggleFormBtn.classList.add('bg-gray-500');
+            } else {
+                toggleFormBtn.textContent = 'Cadastrar';
+                toggleFormBtn.classList.remove('bg-gray-500');
+                toggleFormBtn.classList.add('bg-blue-600');
+            }
+        }
+
+
+        /**
+         * Função principal de inicialização
+         */
+        async function init() {
+            // Expõe funções para serem chamadas pelo HTML
+            window.confirmDelivery = confirmDelivery; 
+            window.confirmPix = confirmPix; 
+            window.addNewDelivery = addNewDelivery; 
+            window.toggleForm = toggleForm;
+            window.filterDeliveries = filterDeliveries; 
+            window.formatCurrencyInput = formatCurrencyInput; 
+
+            // 0. Preenche os selects do formulário
+            populateSelects();
+
+            loadingSpinner.classList.remove('hidden');
+            errorMessage.classList.add('hidden');
+            
+            // 1. Inicializa o Firebase
+            await initializeFirebase();
+            
+            // 2. Adiciona listeners
+            // Alterado para chamar filterDeliveries() sem argumentos para iniciar busca por texto
+            searchInput.addEventListener('input', () => filterDeliveries()); 
+            formElement.addEventListener('submit', addNewDelivery);
+            toggleFormBtn.addEventListener('click', toggleForm);
+        }
+
+        // Inicia o aplicativo ao carregar a janela
+        window.onload = init;
+    </script>
+</body>
+</html>
+[delivery_tracker. index.html](https://github.com/user-attachments/files/22648405/delivery_tracker.index.html)
